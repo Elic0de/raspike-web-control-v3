@@ -1,4 +1,4 @@
-import { Battery, Bluetooth, Power, StopCircle } from "lucide-react"
+import { Battery, Bluetooth, Palette, StopCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import type {
@@ -12,13 +12,11 @@ export function Header({
   gatewayUrl,
   status,
   hardwareTelemetry,
-  onToggleEnabled,
   onStop,
 }: {
   gatewayUrl: string
   status: HeaderStatus
   hardwareTelemetry: HardwareTelemetry
-  onToggleEnabled: () => void
   onStop: () => void
 }) {
   return (
@@ -72,13 +70,15 @@ export function Header({
           {status.batteryText}
         </StatusBadge>
         <Button
-          variant={status.enabled ? "secondary" : "outline"}
+          variant="outline"
           size="sm"
           className="h-9 rounded-full border-neutral-200 bg-white px-4 text-neutral-900 hover:bg-neutral-100"
-          onClick={onToggleEnabled}
+          asChild
         >
-          <Power className="size-4" />
-          {status.enabled ? "Disable" : "Enable"}
+          <a href="/calibration">
+            <Palette className="size-4" />
+            Calibration
+          </a>
         </Button>
         <Button
           variant="destructive"

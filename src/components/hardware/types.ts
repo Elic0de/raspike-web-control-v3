@@ -9,7 +9,6 @@ export type HeaderStatus = {
   telemetryReady: boolean
   telemetryAgeSec?: number | null
   batteryText: string
-  enabled: boolean
 }
 
 export type HardwarePort = {

@@ -1,5 +1,5 @@
 import { createReadStream, existsSync, statSync } from "node:fs"
-import { readFile } from "node:fs/promises"
+import { open as openFile, readFile } from "node:fs/promises"
 import { createServer, request } from "node:http"
 import { extname, join, normalize, resolve, sep } from "node:path"
 import { createHash } from "node:crypto"
@@ -39,6 +39,67 @@ const cameraStreamUrl =
   process.env.CAMERA_STREAM_URL ||
   process.env.RASPI_CAMERA_STREAM_URL ||
   `http://${bridgeHost}:8080/stream.mjpg`
+const etroboTelemetryCsv = process.env.ETROBO_TELEMETRY_CSV || ""
+
+function numericCsvValue(row, columns, name) {
+  const index = columns.get(name)
+  if (index === undefined) return null
+  const value = Number(row[index])
+  return Number.isFinite(value) ? value : null
+}
+
+async function readLatestEtroboRecord(path, size) {
+  if (size <= 0) return null
+  const handle = await openFile(path, "r")
+  try {
+    const headerLength = Math.min(size, 8192)
+    const headerBuffer = Buffer.alloc(headerLength)
+    await handle.read(headerBuffer, 0, headerLength, 0)
+    const headerLine = headerBuffer.toString("utf8").split(/\r?\n/, 1)[0]
+    if (!headerLine.includes("script_step_id")) return null
+
+    const tailLength = Math.min(size, 16384)
+    const tailBuffer = Buffer.alloc(tailLength)
+    await handle.read(tailBuffer, 0, tailLength, size - tailLength)
+    const lines = tailBuffer
+      .toString("utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+    if (lines.length === 0) return null
+    const row = lines.at(-1).split(",")
+    const columns = new Map(
+      headerLine.split(",").map((name, index) => [name.trim(), index])
+    )
+
+    return {
+      timestamp_us: numericCsvValue(row, columns, "timestamp_us"),
+      state_id: numericCsvValue(row, columns, "state_id"),
+      script_step_id: numericCsvValue(row, columns, "script_step_id"),
+      script_action_id: numericCsvValue(row, columns, "script_action_id"),
+      script_error_code: numericCsvValue(row, columns, "script_error_code"),
+      brightness: numericCsvValue(row, columns, "line_raw_l"),
+      phase_elapsed_ms: numericCsvValue(row, columns, "phase_elapsed_ms"),
+      color_id: numericCsvValue(row, columns, "color_id"),
+      color_r: numericCsvValue(row, columns, "color_r"),
+      color_g: numericCsvValue(row, columns, "color_g"),
+      color_b: numericCsvValue(row, columns, "color_b"),
+      norm_r: numericCsvValue(row, columns, "norm_r"),
+      norm_g: numericCsvValue(row, columns, "norm_g"),
+      norm_b: numericCsvValue(row, columns, "norm_b"),
+      hue: numericCsvValue(row, columns, "std_h"),
+      saturation: numericCsvValue(row, columns, "std_s"),
+      value: numericCsvValue(row, columns, "std_v"),
+      color_confirmed: numericCsvValue(row, columns, "color_confirmed"),
+      color_confidence: numericCsvValue(row, columns, "color_confidence"),
+      calib_black: numericCsvValue(row, columns, "calib_black"),
+      calib_white: numericCsvValue(row, columns, "calib_white"),
+      calib_blue: numericCsvValue(row, columns, "calib_blue"),
+      calib_target: numericCsvValue(row, columns, "calib_target"),
+    }
+  } finally {
+    await handle.close()
+  }
+}
 
 class Gateway {
   constructor() {
@@ -52,6 +113,9 @@ class Gateway {
     this.nextBridgeRetryAt = 0
     this.lastControlLog = ""
     this.lastTelemetryBroadcastAt = 0
+    this.latestEtroboTelemetry = null
+    this.lastEtroboCsvMtimeMs = 0
+    this.readingEtroboTelemetry = false
 
     this.udp = dgram.createSocket("udp4")
     this.udp.on("message", (data, rinfo) => this.readTelemetry(data, rinfo))
@@ -69,10 +133,16 @@ class Gateway {
       this.ensureBridgeConnected()
       this.broadcastStatus()
     }, 1000)
+    if (etroboTelemetryCsv) {
+      this.etroboTimer = setInterval(() => this.pollEtroboTelemetry(), 200)
+      this.pollEtroboTelemetry()
+      console.log(`ETROBO telemetry CSV <- ${etroboTelemetryCsv}`)
+    }
   }
 
   close() {
     clearInterval(this.statusTimer)
+    clearInterval(this.etroboTimer)
     for (const client of this.clients) {
       client.close()
     }
@@ -88,6 +158,12 @@ class Gateway {
 
     if (this.latestTelemetry) {
       this.send(ws, { type: "telemetry", payload: this.latestTelemetry })
+    }
+    if (this.latestEtroboTelemetry) {
+      this.send(ws, {
+        type: "etrobo_telemetry",
+        payload: this.latestEtroboTelemetry,
+      })
     }
     this.sendStatus(ws)
   }
@@ -110,6 +186,35 @@ class Gateway {
       }
     } catch {
       // Ignore malformed telemetry datagrams.
+    }
+  }
+
+  async pollEtroboTelemetry() {
+    if (this.readingEtroboTelemetry) return
+    let fileStat
+    try {
+      fileStat = statSync(etroboTelemetryCsv)
+    } catch {
+      return
+    }
+    if (!fileStat.isFile() || fileStat.mtimeMs === this.lastEtroboCsvMtimeMs) {
+      return
+    }
+
+    this.readingEtroboTelemetry = true
+    try {
+      const record = await readLatestEtroboRecord(
+        etroboTelemetryCsv,
+        fileStat.size
+      )
+      if (!record) return
+      this.lastEtroboCsvMtimeMs = fileStat.mtimeMs
+      this.latestEtroboTelemetry = record
+      this.broadcast({ type: "etrobo_telemetry", payload: record })
+    } catch (error) {
+      console.warn(`ETROBO telemetry read failed: ${error.message}`)
+    } finally {
+      this.readingEtroboTelemetry = false
     }
   }
 
@@ -183,8 +288,6 @@ class Gateway {
         return
       }
       summary = `drive throttle=${throttle} steering=${steering} arm=${arm}`
-    } else if (payload.type === "enable") {
-      summary = `enable=${payload.enabled}`
     } else if (payload.type === "action") {
       summary = `action=${payload.action}`
     }

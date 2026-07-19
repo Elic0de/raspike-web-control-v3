@@ -35,6 +35,7 @@ Open:
 
 ```text
 http://127.0.0.1:5173
+http://127.0.0.1:5173/calibration
 ```
 
 ## Production
@@ -75,7 +76,13 @@ TELEMETRY_PORT=8765
 BRIDGE_HOST=<OVERRIDE_HOST>
 BRIDGE_PORT=8766
 CAMERA_STREAM_URL=http://<OVERRIDE_HOST>:8080/stream.mjpg
+ETROBO_TELEMETRY_CSV=/home/raspike/etrobo2026/logs/latest.csv
 ```
+
+`ETROBO_TELEMETRY_CSV`を設定すると、Gatewayは`etrobo2026`が出力する最新CSVを読み、
+SPIKE側のキャリブレーション工程、色センサー値、判定結果をWebSocketへ転送します。
+未設定またはファイルが存在しない場合、Web UIは`ETROBO telemetry waiting`と表示します。
+Raspberry Pi上では`http://<RASPI_IP>:3000/calibration`から専用画面を直接開けます。
 
 Client-side Vite variables:
 

@@ -185,10 +185,15 @@ function estimateTilt(accel: number[] | undefined) {
   }
 }
 
-function getAxis(keys: Set<string>): Drive {
+function getAxis(keys: Set<string>, steeringMagnitude = 0): Drive {
+  const precision = keys.has("shift")
+  const throttleScale = precision ? 0.4 : 1
+  const steeringDirection =
+    (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0)
   return {
-    throttle: (keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0),
-    steering: (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0),
+    throttle:
+      ((keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0)) * throttleScale,
+    steering: steeringDirection * steeringMagnitude,
     arm: (keys.has("arrowup") ? 1 : 0) - (keys.has("arrowdown") ? 1 : 0),
   }
 }
@@ -210,8 +215,8 @@ export function HardwareDashboard() {
   const [wsState, setWsState] = useState<WsState>("connecting")
   const [gateway, setGateway] = useState<GatewayStatus>({})
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null)
-  const [enabled, setEnabled] = useState(false)
   const [cameraOk, setCameraOk] = useState(false)
+  const [pressedKeys, setPressedKeys] = useState<Set<string>>(new Set())
   const [drive, setDrive] = useState<Drive>({
     throttle: 0,
     steering: 0,
@@ -221,7 +226,6 @@ export function HardwareDashboard() {
 
   const wsRef = useRef<WebSocket | null>(null)
   const keysRef = useRef<Set<string>>(new Set())
-  const enabledRef = useRef(false)
 
   const send = (payload: object) => {
     const ws = wsRef.current
@@ -229,10 +233,6 @@ export function HardwareDashboard() {
       ws.send(JSON.stringify(payload))
     }
   }
-
-  useEffect(() => {
-    enabledRef.current = enabled
-  }, [enabled])
 
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined
@@ -313,39 +313,104 @@ export function HardwareDashboard() {
   }, [])
 
   useEffect(() => {
+    const controlKeys = new Set([
+      "w",
+      "a",
+      "s",
+      "d",
+      "shift",
+      "arrowup",
+      "arrowdown",
+      " ",
+    ])
+
+    let steeringMagnitude = 0
+    let previousSteeringDirection = 0
+    let lastDriveUpdate = performance.now()
+
     const updateDrive = () => {
-      const next = getAxis(keysRef.current)
-      setDrive(next)
-      if (enabledRef.current) {
-        send({ type: "drive", ...next })
+      const now = performance.now()
+      const dt = Math.min((now - lastDriveUpdate) / 1000, 0.1)
+      lastDriveUpdate = now
+
+      const keys = keysRef.current
+      const steeringDirection =
+        (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0)
+      const steeringLimit = keys.has("shift") ? 0.25 : 0.55
+
+      if (steeringDirection === 0) {
+        steeringMagnitude = 0
+      } else if (steeringDirection !== previousSteeringDirection) {
+        steeringMagnitude = Math.min(0.25, steeringLimit)
+      } else {
+        steeringMagnitude = Math.min(
+          steeringLimit,
+          steeringMagnitude + 0.75 * dt
+        )
       }
+      previousSteeringDirection = steeringDirection
+
+      const next = getAxis(keys, steeringMagnitude)
+      setDrive(next)
+      send({ type: "drive", ...next })
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
-      if (["w", "a", "s", "d", "arrowup", "arrowdown", " "].includes(key)) {
-        event.preventDefault()
+      if (!controlKeys.has(key)) {
+        return
       }
+      event.preventDefault()
       if (key === " ") {
-        send({ type: "action", action: "emergency_stop" })
+        if (!event.repeat) {
+          keysRef.current.add(key)
+          setPressedKeys(new Set(keysRef.current))
+          send({ type: "action", action: "emergency_stop" })
+        }
         return
       }
       keysRef.current.add(key)
+      setPressedKeys(new Set(keysRef.current))
       updateDrive()
     }
 
     const onKeyUp = (event: KeyboardEvent) => {
-      keysRef.current.delete(event.key.toLowerCase())
+      const key = event.key.toLowerCase()
+      if (!controlKeys.has(key)) {
+        return
+      }
+      event.preventDefault()
+      keysRef.current.delete(key)
+      setPressedKeys(new Set(keysRef.current))
       updateDrive()
+    }
+
+    const releaseAllKeys = () => {
+      if (keysRef.current.size === 0) {
+        return
+      }
+      keysRef.current.clear()
+      setPressedKeys(new Set())
+      updateDrive()
+    }
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        releaseAllKeys()
+      }
     }
 
     window.addEventListener("keydown", onKeyDown)
     window.addEventListener("keyup", onKeyUp)
+    window.addEventListener("blur", releaseAllKeys)
+    document.addEventListener("visibilitychange", onVisibilityChange)
     const interval = setInterval(updateDrive, 50)
 
     return () => {
       window.removeEventListener("keydown", onKeyDown)
       window.removeEventListener("keyup", onKeyUp)
+      window.removeEventListener("blur", releaseAllKeys)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
       clearInterval(interval)
     }
   }, [])
@@ -470,7 +535,6 @@ export function HardwareDashboard() {
     telemetryReady: hasTelemetry,
     telemetryAgeSec: gateway.telemetry_age_sec,
     batteryText: batteryText(telemetry),
-    enabled,
   }
   const gyro = telemetry?.imu?.angular_velocity ?? []
   const tilt = estimateTilt(telemetry?.imu?.acceleration)
@@ -488,12 +552,6 @@ export function HardwareDashboard() {
     })),
   }
 
-  const toggleEnabled = () => {
-    const next = !enabled
-    setEnabled(next)
-    send({ type: "enable", enabled: next })
-  }
-
   const sendAction = (action: string) => {
     send({ type: "action", action })
   }
@@ -505,7 +563,6 @@ export function HardwareDashboard() {
           gatewayUrl={wsUrl}
           status={headerStatus}
           hardwareTelemetry={hardwareTelemetry}
-          onToggleEnabled={toggleEnabled}
           onStop={() => sendAction("emergency_stop")}
         />
 
@@ -519,8 +576,8 @@ export function HardwareDashboard() {
             onError={() => setCameraOk(false)}
           />
 
-          <aside className="grid min-h-0 content-start gap-3">
-            <DriveCard drive={drive} />
+          <aside className="grid min-h-0 content-start gap-3 lg:overflow-y-auto lg:pr-1">
+            <DriveCard drive={drive} pressedKeys={pressedKeys} />
             <HubButtonsCard
               onLeft={() => sendAction("button_left")}
               onCenter={() => sendAction("center_button")}
@@ -538,10 +595,7 @@ export function HardwareDashboard() {
                   label: "FORCE",
                   detail: "Press",
                   icon: Download,
-                  onClick: () => {
-                    // TODO: Replace with a bridge-supported force sensor action when available.
-                    sendAction("force_press")
-                  },
+                  onClick: () => sendAction("virtual_force_touch"),
                 },
               ]}
             />

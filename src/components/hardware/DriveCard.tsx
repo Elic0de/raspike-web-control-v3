@@ -20,7 +20,29 @@ function DriveMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
-export function DriveCard({ drive }: { drive: Drive }) {
+function Key({ name, active = false }: { name: string; active?: boolean }) {
+  return (
+    <kbd
+      className={`inline-grid min-w-7 place-items-center rounded-md border px-1.5 py-1 font-mono text-xs font-semibold shadow-sm transition-colors ${
+        active
+          ? "border-blue-500 bg-blue-500 text-white"
+          : "border-neutral-300 bg-neutral-50 text-neutral-700"
+      }`}
+    >
+      {name}
+    </kbd>
+  )
+}
+
+export function DriveCard({
+  drive,
+  pressedKeys,
+}: {
+  drive: Drive
+  pressedKeys: Set<string>
+}) {
+  const active = (key: string) => pressedKeys.has(key)
+
   return (
     <Card className="gap-3 rounded-2xl border border-neutral-200 bg-white py-0 shadow-sm">
       <CardHeader className="px-4 pt-4">
@@ -29,7 +51,7 @@ export function DriveCard({ drive }: { drive: Drive }) {
           Drive
         </CardTitle>
         <CardAction className="text-xs font-medium text-neutral-400">
-          WASD / Arrows
+          Keyboard control
         </CardAction>
       </CardHeader>
       <CardContent className="px-4 pb-4">
@@ -47,6 +69,34 @@ export function DriveCard({ drive }: { drive: Drive }) {
           <DriveMetric label="THROTTLE" value={drive.throttle.toFixed(2)} />
           <DriveMetric label="STEERING" value={drive.steering.toFixed(2)} />
           <DriveMetric label="ARM" value={drive.arm.toFixed(2)} />
+        </div>
+        <div className="mt-4 space-y-2 border-t border-neutral-100 pt-3 text-xs text-neutral-600">
+          <div className="flex items-center justify-between gap-3">
+            <span>Drive / steering</span>
+            <div className="flex gap-1">
+              {(["w", "a", "s", "d"] as const).map((key) => (
+                <Key key={key} name={key.toUpperCase()} active={active(key)} />
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span>Precision: speed 40% / turn 25%</span>
+            <Key name="Shift" active={active("shift")} />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span>Arm up / down</span>
+            <div className="flex gap-1">
+              <Key name="↑" active={active("arrowup")} />
+              <Key name="↓" active={active("arrowdown")} />
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-3 font-medium text-red-600">
+            <span>Emergency stop</span>
+            <Key name="Space" active={active(" ")} />
+          </div>
+          <p className="pt-1 text-[11px] leading-relaxed text-neutral-400">
+            W/S: forward/reverse · A/D: 25% start → 55% hold · opposite keys cancel
+          </p>
         </div>
       </CardContent>
     </Card>
