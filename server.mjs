@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, statSync } from "node:fs"
 import { open as openFile, readFile } from "node:fs/promises"
-import { createServer, request } from "node:http"
+import { createServer } from "node:http"
 import { extname, join, normalize, resolve, sep } from "node:path"
 import { createHash } from "node:crypto"
 import { EventEmitter } from "node:events"
@@ -35,10 +35,6 @@ const bridgePort = Number.parseInt(
   10
 )
 const bridgeRetrySec = Number.parseFloat(process.env.BRIDGE_RETRY_SEC || "1")
-const cameraStreamUrl =
-  process.env.CAMERA_STREAM_URL ||
-  process.env.RASPI_CAMERA_STREAM_URL ||
-  `http://${bridgeHost}:8080/stream.mjpg`
 const etroboTelemetryCsv = process.env.ETROBO_TELEMETRY_CSV || ""
 
 function numericCsvValue(row, columns, name) {
@@ -343,15 +339,6 @@ const server = createServer((req, res) => {
   const pathname = new URL(req.url ?? "/", `http://${req.headers.host}`)
     .pathname
 
-  if (pathname === "/camera/status") {
-    checkCameraStream(res)
-    return
-  }
-  if (pathname === "/camera/stream.mjpg") {
-    proxyCameraStream(res)
-    return
-  }
-
   serveStatic(req, res).catch((error) => {
     console.error(`static serve error: ${error.message}`)
     res.writeHead(500, { "content-type": "text/plain; charset=utf-8" })
@@ -385,7 +372,6 @@ server.listen(port, host, () => {
   console.log(`WebUI: http://${displayHost}:${port}`)
   console.log(`target mode: ${targetMode}`)
   console.log(`control tcp -> ${bridgeHost}:${bridgePort}`)
-  console.log(`camera stream <- ${cameraStreamUrl}`)
   if (targetMode === "local" && !remoteHost && !process.env.BRIDGE_HOST) {
     console.warn("local target mode has no RASPIKE_REMOTE_HOST or BRIDGE_HOST")
   }
@@ -426,105 +412,6 @@ async function serveStatic(req, res) {
 
   res.writeHead(200, headers)
   createReadStream(filePath).pipe(res)
-}
-
-function proxyCameraStream(res) {
-  let upstreamUrl
-  try {
-    upstreamUrl = new URL(cameraStreamUrl)
-  } catch {
-    res.writeHead(502, { "content-type": "text/plain" })
-    res.end("invalid CAMERA_STREAM_URL")
-    return
-  }
-
-  const upstream = request(
-    upstreamUrl,
-    {
-      method: "GET",
-      timeout: 5000,
-    },
-    (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode ?? 502, {
-        "content-type":
-          upstreamRes.headers["content-type"] ||
-          "multipart/x-mixed-replace; boundary=frame",
-        "cache-control": "no-store",
-      })
-      upstreamRes.pipe(res)
-    }
-  )
-
-  upstream.on("timeout", () => {
-    upstream.destroy(new Error("camera stream timeout"))
-  })
-  upstream.on("error", (error) => {
-    if (!res.headersSent) {
-      res.writeHead(502, { "content-type": "text/plain" })
-    }
-    res.end(`camera stream unavailable: ${error.message}`)
-  })
-  res.on("close", () => upstream.destroy())
-  upstream.end()
-}
-
-function checkCameraStream(res) {
-  let upstreamUrl
-  try {
-    upstreamUrl = new URL(cameraStreamUrl)
-  } catch {
-    res.writeHead(502, { "content-type": "application/json" })
-    res.end(JSON.stringify({ ok: false, error: "invalid CAMERA_STREAM_URL" }))
-    return
-  }
-
-  let settled = false
-  const finish = (status, payload) => {
-    if (settled) {
-      return
-    }
-    settled = true
-    res.writeHead(status, {
-      "content-type": "application/json",
-      "cache-control": "no-store",
-    })
-    res.end(JSON.stringify(payload))
-  }
-
-  const upstream = request(
-    upstreamUrl,
-    {
-      method: "GET",
-      timeout: 3000,
-    },
-    (upstreamRes) => {
-      if ((upstreamRes.statusCode ?? 0) >= 400) {
-        finish(upstreamRes.statusCode ?? 502, {
-          ok: false,
-          status: upstreamRes.statusCode,
-        })
-        upstream.destroy()
-        return
-      }
-
-      upstreamRes.once("data", (chunk) => {
-        finish(200, {
-          ok: chunk.length > 0,
-          status: upstreamRes.statusCode,
-          content_type: upstreamRes.headers["content-type"] ?? null,
-        })
-        upstream.destroy()
-      })
-    }
-  )
-
-  upstream.on("timeout", () => {
-    upstream.destroy(new Error("camera stream timeout"))
-  })
-  upstream.on("error", (error) => {
-    finish(502, { ok: false, error: error.message })
-  })
-  upstream.end()
 }
 
 function mimeType(filePath) {

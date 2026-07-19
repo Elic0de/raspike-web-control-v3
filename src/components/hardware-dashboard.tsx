@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Download, RotateCcw } from "lucide-react"
 
 import { ActionsCard } from "@/components/hardware/ActionsCard"
-import { CameraCard } from "@/components/hardware/CameraCard"
 import { DriveCard } from "@/components/hardware/DriveCard"
 import { HardwarePortBar } from "@/components/hardware/HardwarePortBar"
 import { Header } from "@/components/hardware/Header"
@@ -105,10 +104,6 @@ function getGatewayWsUrl() {
 
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:"
   return `${proto}//${window.location.host}/ws`
-}
-
-function getCameraStreamUrl() {
-  return import.meta.env.VITE_CAMERA_STREAM_URL ?? "/camera/stream.mjpg"
 }
 
 function portName(port: number | undefined): PortId | undefined {
@@ -215,7 +210,6 @@ export function HardwareDashboard() {
   const [wsState, setWsState] = useState<WsState>("connecting")
   const [gateway, setGateway] = useState<GatewayStatus>({})
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null)
-  const [cameraOk, setCameraOk] = useState(false)
   const [pressedKeys, setPressedKeys] = useState<Set<string>>(new Set())
   const [drive, setDrive] = useState<Drive>({
     throttle: 0,
@@ -297,38 +291,6 @@ export function HardwareDashboard() {
         wsRef.current.send(JSON.stringify({ type: "enable", enabled: false }))
       }
       wsRef.current?.close()
-    }
-  }, [])
-
-  useEffect(() => {
-    let closed = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-
-    const checkCamera = async () => {
-      try {
-        const response = await fetch("/camera/status", { cache: "no-store" })
-        const payload = await response.json()
-        if (!closed) {
-          setCameraOk(response.ok && Boolean(payload.ok))
-        }
-      } catch {
-        if (!closed) {
-          setCameraOk(false)
-        }
-      } finally {
-        if (!closed) {
-          timer = setTimeout(checkCamera, 3000)
-        }
-      }
-    }
-
-    checkCamera()
-
-    return () => {
-      closed = true
-      if (timer) {
-        clearTimeout(timer)
-      }
     }
   }, [])
 
@@ -560,7 +522,6 @@ export function HardwareDashboard() {
   const hasTelemetry =
     Boolean(gateway.telemetry_count && gateway.telemetry_count > 0) &&
     (gateway.telemetry_age_sec ?? 999) < 2
-  const cameraStreamUrl = getCameraStreamUrl()
   const headerStatus: HeaderStatus = {
     wsState,
     controlConnected: Boolean(gateway.control_connected),
@@ -600,15 +561,7 @@ export function HardwareDashboard() {
 
         <HardwarePortBar ports={ports} />
 
-        <div className="grid min-h-0 gap-4 lg:grid-cols-[1fr_360px]">
-          <CameraCard
-            streamUrl={cameraStreamUrl}
-            cameraOk={cameraOk}
-            onLoad={() => setCameraOk(true)}
-            onError={() => setCameraOk(false)}
-          />
-
-          <aside className="grid min-h-0 content-start gap-3 lg:overflow-y-auto lg:pr-1">
+        <div className="grid min-h-0 content-start gap-3 md:grid-cols-2 lg:grid-cols-3 lg:overflow-y-auto lg:pr-1">
             <DriveCard drive={drive} pressedKeys={pressedKeys} />
             <HubButtonsCard
               onLeft={() => sendAction("button_left")}
@@ -631,7 +584,6 @@ export function HardwareDashboard() {
                 },
               ]}
             />
-          </aside>
         </div>
       </div>
     </main>

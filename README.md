@@ -7,12 +7,10 @@ v2 の Next.js 構成から、配布しやすい静的 `dist` 構成へ移行し
 - `dist/` の静的配信
 - Browser WebSocket `/ws` と bridge TCP の中継
 - RasPi telemetry UDP の受信と Browser への配信
-- camera stream `/camera/stream.mjpg` の proxy
 
 ```text
 RasPi UDP telemetry -> server.mjs -> Browser WebSocket
 Browser control -> server.mjs -> RasPi TCP control
-Browser camera -> server.mjs -> RasPi camera stream
 ```
 
 ## Development
@@ -24,7 +22,7 @@ pnpm install
 pnpm dev
 ```
 
-gateway も動かす場合は別ターミナルで起動します。Vite は `/ws` と `/camera` を `127.0.0.1:3001` へ proxy します。
+gateway も動かす場合は別ターミナルで起動します。Vite は `/ws` を `127.0.0.1:3001` へ proxy します。
 
 ```bash
 pnpm dev:gateway
@@ -56,7 +54,7 @@ Default remote mode:
 RASPIKE_TARGET=remote pnpm start
 ```
 
-In remote mode, leave `BRIDGE_HOST` and `CAMERA_STREAM_URL` unset. The server listens on `0.0.0.0:3000`, receives telemetry on UDP `0.0.0.0:8765`, connects control TCP to `127.0.0.1:8766`, and proxies camera from `http://127.0.0.1:8080/stream.mjpg`.
+In remote mode, the server listens on `0.0.0.0:3000`, receives telemetry on UDP `0.0.0.0:8765`, and connects control TCP to `127.0.0.1:8766`.
 
 Optional local PC mode:
 
@@ -75,7 +73,6 @@ TELEMETRY_HOST=0.0.0.0
 TELEMETRY_PORT=8765
 BRIDGE_HOST=<OVERRIDE_HOST>
 BRIDGE_PORT=8766
-CAMERA_STREAM_URL=http://<OVERRIDE_HOST>:8080/stream.mjpg
 ETROBO_TELEMETRY_CSV=/home/raspike/etrobo2026/logs/latest.csv
 ```
 
@@ -88,7 +85,6 @@ Client-side Vite variables:
 
 ```bash
 VITE_GATEWAY_WS_URL=ws://127.0.0.1:3000/ws
-VITE_CAMERA_STREAM_URL=/camera/stream.mjpg
 ```
 
-Usually both can remain unset. The browser will use the current host for `/ws` and `/camera/stream.mjpg`.
+Usually this can remain unset. The browser will use the current host for `/ws`.
