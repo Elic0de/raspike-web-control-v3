@@ -226,6 +226,12 @@ export function HardwareDashboard() {
 
   const wsRef = useRef<WebSocket | null>(null)
   const keysRef = useRef<Set<string>>(new Set())
+  const controlEnabledRef = useRef(false)
+
+  const hasActiveControlKey = () =>
+    ["w", "a", "s", "d", "arrowup", "arrowdown"].some((key) =>
+      keysRef.current.has(key)
+    )
 
   const send = (payload: object) => {
     const ws = wsRef.current
@@ -245,11 +251,19 @@ export function HardwareDashboard() {
       const ws = new WebSocket(url)
       wsRef.current = ws
 
-      ws.addEventListener("open", () => setWsState("connected"))
+      ws.addEventListener("open", () => {
+        setWsState("connected")
+        controlEnabledRef.current = false
+        if (hasActiveControlKey()) {
+          ws.send(JSON.stringify({ type: "enable", enabled: true }))
+          controlEnabledRef.current = true
+        }
+      })
       ws.addEventListener("close", () => {
         if (wsRef.current === ws) {
           wsRef.current = null
         }
+        controlEnabledRef.current = false
         setWsState("disconnected")
         if (!closed) {
           reconnectTimer = setTimeout(connect, 800)
@@ -275,6 +289,12 @@ export function HardwareDashboard() {
       closed = true
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
+      }
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({ type: "drive", throttle: 0, steering: 0, arm: 0 })
+        )
+        wsRef.current.send(JSON.stringify({ type: "enable", enabled: false }))
       }
       wsRef.current?.close()
     }
@@ -371,6 +391,10 @@ export function HardwareDashboard() {
       }
       keysRef.current.add(key)
       setPressedKeys(new Set(keysRef.current))
+      if (!controlEnabledRef.current && hasActiveControlKey()) {
+        send({ type: "enable", enabled: true })
+        controlEnabledRef.current = true
+      }
       updateDrive()
     }
 
@@ -383,6 +407,10 @@ export function HardwareDashboard() {
       keysRef.current.delete(key)
       setPressedKeys(new Set(keysRef.current))
       updateDrive()
+      if (controlEnabledRef.current && !hasActiveControlKey()) {
+        send({ type: "enable", enabled: false })
+        controlEnabledRef.current = false
+      }
     }
 
     const releaseAllKeys = () => {
@@ -392,6 +420,10 @@ export function HardwareDashboard() {
       keysRef.current.clear()
       setPressedKeys(new Set())
       updateDrive()
+      if (controlEnabledRef.current) {
+        send({ type: "enable", enabled: false })
+        controlEnabledRef.current = false
+      }
     }
 
     const onVisibilityChange = () => {
