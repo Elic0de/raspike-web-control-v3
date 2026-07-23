@@ -10,6 +10,7 @@ import { Header } from "@/components/hardware/Header"
 import { HubButtonsCard } from "@/components/hardware/HubButtonsCard"
 import type {
   Drive,
+  DriveSettings,
   HardwarePort,
   HardwareTelemetry,
   HeaderStatus,
@@ -95,6 +96,28 @@ type GatewayStatus = {
 }
 
 const shownPorts = ["A", "B", "C", "D", "E", "F"] as const
+const driveSettingsKey = "raspike-drive-settings-v1"
+const defaultDriveSettings: DriveSettings = {
+  speed: 1,
+  turn: 1,
+  turnStart: 0.65,
+  turnRamp: 1.5,
+  precisionSpeed: 0.4,
+  precisionTurn: 0.45,
+  arm: 1,
+  autoEnable: true,
+}
+
+function loadDriveSettings(): DriveSettings {
+  try {
+    return {
+      ...defaultDriveSettings,
+      ...JSON.parse(localStorage.getItem(driveSettingsKey) ?? "{}"),
+    }
+  } catch {
+    return defaultDriveSettings
+  }
+}
 
 function getGatewayWsUrl() {
   const configured = import.meta.env.VITE_GATEWAY_WS_URL
@@ -180,16 +203,22 @@ function estimateTilt(accel: number[] | undefined) {
   }
 }
 
-function getAxis(keys: Set<string>, steeringMagnitude = 0): Drive {
+function getAxis(
+  keys: Set<string>,
+  steeringMagnitude: number,
+  settings: DriveSettings
+): Drive {
   const precision = keys.has("shift")
-  const throttleScale = precision ? 0.4 : 1
+  const throttleScale = settings.speed * (precision ? settings.precisionSpeed : 1)
   const steeringDirection =
     (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0)
   return {
     throttle:
       ((keys.has("w") ? 1 : 0) - (keys.has("s") ? 1 : 0)) * throttleScale,
     steering: steeringDirection * steeringMagnitude,
-    arm: (keys.has("arrowup") ? 1 : 0) - (keys.has("arrowdown") ? 1 : 0),
+    arm:
+      ((keys.has("arrowup") ? 1 : 0) - (keys.has("arrowdown") ? 1 : 0)) *
+      settings.arm,
   }
 }
 
@@ -217,10 +246,37 @@ export function HardwareDashboard() {
     arm: 0,
   })
   const [wsUrl, setWsUrl] = useState("")
+  const [controlEnabled, setControlEnabled] = useState(false)
+  const [driveSettings, setDriveSettings] = useState(loadDriveSettings)
 
   const wsRef = useRef<WebSocket | null>(null)
   const keysRef = useRef<Set<string>>(new Set())
   const controlEnabledRef = useRef(false)
+  const settingsRef = useRef(driveSettings)
+  const virtualKeyRef = useRef<(key: string, pressed: boolean) => void>(() => {})
+
+  const applySettings = (next: DriveSettings) => {
+    const normalized = {
+      ...next,
+      turnStart: Math.min(next.turnStart, next.turn),
+    }
+    settingsRef.current = normalized
+    setDriveSettings(normalized)
+    localStorage.setItem(driveSettingsKey, JSON.stringify(normalized))
+  }
+
+  const setBridgeEnabled = (enabled: boolean) => {
+    if (!enabled) {
+      keysRef.current.clear()
+      setPressedKeys(new Set())
+      const stopped = { throttle: 0, steering: 0, arm: 0 }
+      setDrive(stopped)
+      send({ type: "drive", ...stopped })
+    }
+    send({ type: "enable", enabled })
+    controlEnabledRef.current = enabled
+    setControlEnabled(enabled)
+  }
 
   const hasActiveControlKey = () =>
     ["w", "a", "s", "d", "arrowup", "arrowdown"].some((key) =>
@@ -248,9 +304,11 @@ export function HardwareDashboard() {
       ws.addEventListener("open", () => {
         setWsState("connected")
         controlEnabledRef.current = false
-        if (hasActiveControlKey()) {
+        setControlEnabled(false)
+        if (settingsRef.current.autoEnable && hasActiveControlKey()) {
           ws.send(JSON.stringify({ type: "enable", enabled: true }))
           controlEnabledRef.current = true
+          setControlEnabled(true)
         }
       })
       ws.addEventListener("close", () => {
@@ -258,6 +316,7 @@ export function HardwareDashboard() {
           wsRef.current = null
         }
         controlEnabledRef.current = false
+        setControlEnabled(false)
         setWsState("disconnected")
         if (!closed) {
           reconnectTimer = setTimeout(connect, 800)
@@ -318,21 +377,24 @@ export function HardwareDashboard() {
       const keys = keysRef.current
       const steeringDirection =
         (keys.has("d") ? 1 : 0) - (keys.has("a") ? 1 : 0)
-      const steeringLimit = keys.has("shift") ? 0.25 : 0.55
+      const settings = settingsRef.current
+      const steeringLimit =
+        settings.turn * (keys.has("shift") ? settings.precisionTurn : 1)
+      const steeringStart = Math.min(settings.turnStart, steeringLimit)
 
       if (steeringDirection === 0) {
         steeringMagnitude = 0
       } else if (steeringDirection !== previousSteeringDirection) {
-        steeringMagnitude = Math.min(0.25, steeringLimit)
+        steeringMagnitude = steeringStart
       } else {
         steeringMagnitude = Math.min(
           steeringLimit,
-          steeringMagnitude + 0.75 * dt
+          steeringMagnitude + settings.turnRamp * dt
         )
       }
       previousSteeringDirection = steeringDirection
 
-      const next = getAxis(keys, steeringMagnitude)
+      const next = getAxis(keys, steeringMagnitude, settings)
       setDrive(next)
       send({ type: "drive", ...next })
     }
@@ -353,9 +415,14 @@ export function HardwareDashboard() {
       }
       keysRef.current.add(key)
       setPressedKeys(new Set(keysRef.current))
-      if (!controlEnabledRef.current && hasActiveControlKey()) {
+      if (
+        settingsRef.current.autoEnable &&
+        !controlEnabledRef.current &&
+        hasActiveControlKey()
+      ) {
         send({ type: "enable", enabled: true })
         controlEnabledRef.current = true
+        setControlEnabled(true)
       }
       updateDrive()
     }
@@ -369,9 +436,14 @@ export function HardwareDashboard() {
       keysRef.current.delete(key)
       setPressedKeys(new Set(keysRef.current))
       updateDrive()
-      if (controlEnabledRef.current && !hasActiveControlKey()) {
+      if (
+        settingsRef.current.autoEnable &&
+        controlEnabledRef.current &&
+        !hasActiveControlKey()
+      ) {
         send({ type: "enable", enabled: false })
         controlEnabledRef.current = false
+        setControlEnabled(false)
       }
     }
 
@@ -385,6 +457,32 @@ export function HardwareDashboard() {
       if (controlEnabledRef.current) {
         send({ type: "enable", enabled: false })
         controlEnabledRef.current = false
+        setControlEnabled(false)
+      }
+    }
+
+    virtualKeyRef.current = (key, pressed) => {
+      if (pressed) {
+        keysRef.current.add(key)
+        if (settingsRef.current.autoEnable && !controlEnabledRef.current) {
+          send({ type: "enable", enabled: true })
+          controlEnabledRef.current = true
+          setControlEnabled(true)
+        }
+      } else {
+        keysRef.current.delete(key)
+      }
+      setPressedKeys(new Set(keysRef.current))
+      updateDrive()
+      if (
+        !pressed &&
+        settingsRef.current.autoEnable &&
+        controlEnabledRef.current &&
+        !hasActiveControlKey()
+      ) {
+        send({ type: "enable", enabled: false })
+        controlEnabledRef.current = false
+        setControlEnabled(false)
       }
     }
 
@@ -562,7 +660,16 @@ export function HardwareDashboard() {
         <HardwarePortBar ports={ports} />
 
         <div className="grid min-h-0 content-start gap-3 md:grid-cols-2 lg:grid-cols-3 lg:overflow-y-auto lg:pr-1">
-            <DriveCard drive={drive} pressedKeys={pressedKeys} />
+            <DriveCard
+              drive={drive}
+              pressedKeys={pressedKeys}
+              settings={driveSettings}
+              controlEnabled={controlEnabled}
+              canControl={wsState === "connected" && Boolean(gateway.control_connected)}
+              onSettingsChange={applySettings}
+              onControlEnabledChange={setBridgeEnabled}
+              onVirtualKey={(key, pressed) => virtualKeyRef.current(key, pressed)}
+            />
             <HubButtonsCard
               onLeft={() => sendAction("button_left")}
               onCenter={() => sendAction("center_button")}

@@ -46,6 +46,8 @@ RASPIKE_TARGET=remote pnpm start
 
 `pnpm build` は `dist/` を生成します。platform installer/update は GitHub Releases の `dist.zip` だけを取得します。`server.mjs` は単体ではダウンロードしないため、release 用には `pnpm build:dist-zip` で `dist/` と `server.mjs` を同梱した zip を作成してください。
 
+`main`へpushすると、GitHub Actionsの`Release dist.zip` workflowが同じビルドを実行し、`dist.zip`を添付した最新のGitHub Releaseを自動作成します。Actions画面から手動実行することもできます。
+
 ## Configuration
 
 Default remote mode:
@@ -88,3 +90,13 @@ VITE_GATEWAY_WS_URL=ws://127.0.0.1:3000/ws
 ```
 
 Usually this can remain unset. The browser will use the current host for `/ws`.
+
+## Drive controls
+
+- `ENABLE` / `DISABLE`: bridge controlを手動で有効・無効化
+- `W/S`, `A/D`: 前後進、左右旋回（画面上のボタンも長押し可能）
+- `Shift`: 精密操作
+- `Space`: 緊急停止
+- `Drive settings`: 速度、旋回PWM、初動PWM、立ち上がり、精密モード、アーム出力、自動enableを調整
+
+Drive settingsはブラウザのlocal storageに保存されます。旋回の初期値は、停止状態からでも動き出しやすいように `Turn start=0.65`, `Turn max=1.00` です。

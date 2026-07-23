@@ -1,0 +1,52 @@
+name: Release dist.zip
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: web-v3-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dist.zip
+        run: pnpm build:dist-zip
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: web-v3-${{ github.run_number }}-${{ github.run_attempt }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          gh release create "$TAG_NAME" release/dist.zip \
+            --target "$COMMIT_SHA" \
+            --title "RasPike Web Control v3 build ${{ github.run_number }}.${{ github.run_attempt }}" \
+            --generate-notes \
+            --latest

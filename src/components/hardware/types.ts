@@ -43,6 +43,17 @@ export type Drive = {
   arm: number
 }
 
+export type DriveSettings = {
+  speed: number
+  turn: number
+  turnStart: number
+  turnRamp: number
+  precisionSpeed: number
+  precisionTurn: number
+  arm: number
+  autoEnable: boolean
+}
+
 export type ActionButton = {
   label: string
   detail: string
